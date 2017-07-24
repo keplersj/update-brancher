@@ -1,7 +1,94 @@
 const fs = require("fs");
 const pify = require("pify");
-const cp = require("child_process");
-const chalk = require("chalk");
+const execa = require("execa");
+const Listr = require("listr");
+
+const dependencyTask = dependency => ({
+  title: `\`${dependency}\``,
+  task: () =>
+    new Listr(
+      [
+        {
+          title: "Checking Git Status",
+          task: () =>
+            execa
+              .stdout("git", ["status", "--porcelain"])
+              .then(result => {
+                if (result !== "") {
+                  throw new Error(
+                    "Unclean working tree. Commit or stash changes first."
+                  );
+                }
+              })
+              .catch(err => {
+                throw err;
+              })
+        },
+        {
+          title: "Checking Out `master` Branch",
+          task: () => execa.stdout("git", ["checkout", "master"])
+        },
+        {
+          title: `Checking Out \`update-brancher/update_${dependency}\` Branch`,
+          task: () =>
+            execa
+              .stdout("git", [
+                "checkout",
+                "-b",
+                `update-brancher/update_${dependency}`
+              ])
+              .catch(err => {
+                throw err;
+              })
+        },
+        {
+          title: "Updating Package Using `yarn`",
+          task: (ctx, task) =>
+            execa.stdout("yarn", ["upgrade", dependency]).catch(() => {
+              ctx.yarn = false;
+
+              task.skip(
+                "Yarn not available, install it via `npm install -g yarn`"
+              );
+            })
+        },
+        {
+          title: "Updating Package Using `npm`",
+          enabled: ctx => ctx.yarn === false,
+          task: () =>
+            execa.stdout("npm", ["update", dependency]).catch(err => {
+              execa.stdout("git", ["reset", "--hard", "master"]);
+              execa.stdout("git", ["checkout", "master"]);
+              throw new Error(`Unable to Upgrade Dependency \`${dependency}\``);
+            })
+        },
+        {
+          title: "Staging Changed Files",
+          task: () =>
+            execa.stdout("git", ["add", "-A"]).catch(err => {
+              execa.stdout("git", ["reset", "--hard", "master"]);
+              execa.stdout("git", ["checkout", "master"]);
+              throw new Error(`Unable to Upgrade Dependency \`${dependency}\``);
+            })
+        },
+        {
+          title: "Committing Changed Files",
+          task: () =>
+            execa
+              .stdout("git", ["commit", "-m", `"Update ${dependency}"`])
+              .catch(err => {
+                execa.stdout("git", ["reset", "--hard", "master"]);
+                throw err;
+              })
+        },
+        {
+          title: "Checking Out `master` Branch",
+          task: () => execa.stdout("git", ["checkout", "master"])
+        }
+      ],
+      { exitOnError: false }
+    )
+});
 
 function runUpdate() {
   pify(fs.readFile)("package.json", "utf8")
@@ -10,52 +97,46 @@ function runUpdate() {
       const dependencies = package.dependencies;
       const devDependencies = package.devDependencies;
 
-      const depMap = [];
+      const tasks = new Listr([], { exitOnError: false });
 
       if (dependencies) {
-        for (const dependency in dependencies) {
-          if (dependencies.hasOwnProperty(dependency)) {
-            depMap.push(dependency);
+        tasks.add({
+          title: "Updating Dependencies",
+          task: () => {
+            const depTasks = new Listr([]);
+
+            for (const dependency in dependencies) {
+              if (dependencies.hasOwnProperty(dependency)) {
+                depTasks.add(dependencyTask(dependency));
+              }
+            }
+
+            return depTasks;
           }
-        }
+        });
       }
 
       if (devDependencies) {
-        for (const dependency in devDependencies) {
-          if (devDependencies.hasOwnProperty(dependency)) {
-            depMap.push(dependency);
+        tasks.add({
+          title: "Updating Development Dependencies",
+          task: () => {
+            const depTasks = new Listr([]);
+
+            for (const dependency in devDependencies) {
+              if (devDependencies.hasOwnProperty(dependency)) {
+                depTasks.add(dependencyTask(dependency));
+              }
+            }
+
+            return depTasks;
           }
-        }
+        });
       }
 
-      depMap.forEach((dependency, index) => {
-        console.log(
-          chalk`{blue {bold [${index +
-            1}/${depMap.length}]} Updating Dependency \`{underline.bold ${dependency}}\`}`
-        );
-        try {
-          cp.execSync("git stash");
-          cp.execSync("git checkout master");
-          cp.execSync(`git checkout -b update-brancher/update_${dependency}`);
-          cp.execSync(`yarn upgrade ${dependency}`);
-          cp.execSync("git add -A");
-          cp.execSync(`git commit -m "Update ${dependency}"`);
-          cp.execSync("git checkout master");
-          console.log(
-            chalk`{green {bold [${index +
-              1}/${depMap.length}]} Updated Dependency \`{underline.bold ${dependency}}\` in branch \`{underline.bold update-brancher/update_${dependency}}\`}`
-          );
-        } catch (err) {
-          cp.execSync("git reset --hard master");
-          cp.execSync("git checkout master");
-          console.log(
-            chalk`{red {bold [${index +
-              1}/${depMap.length}]} Failed to Update Dependency \`{underline.bold ${dependency}}\`}`
-          );
-        }
+      tasks.run().catch(err => {
+        console.error(err);
+        process.exit(1);
       });
-
-      process.exit(0);
     })
     .catch(err => {
       console.error(err);
@@ -63,20 +144,26 @@ function runUpdate() {
     });
 }
 
-pify(fs.access)("package.json", fs.constants.R_OK | fs.constants.W_OK)
+const tasks = new Listr(
+  [
+    {
+      title: "Checking for `package.json`",
+      task: () =>
+        pify(fs.access)("package.json", fs.constants.R_OK | fs.constants.W_OK)
+    },
+    {
+      title: "Checking for `.git`",
+      task: () => pify(fs.access)(".git", fs.constants.R_OK | fs.constants.W_OK)
+    }
+  ],
+  { concurrent: true, clearOutput: true }
+);
+
+tasks
+  .run()
   .then(() => {
-    pify(fs.access)(".git", fs.constants.R_OK | fs.constants.W_OK)
-      .then(() => {
-        runUpdate();
-      })
-      .catch(err => {
-        console.error("Cannot access git repository.");
-        console.error(err);
-        process.exit(1);
-      });
+    runUpdate();
   })
   .catch(err => {
-    console.error("Cannot access package.json");
-    console.error(err);
     process.exit(1);
   });
