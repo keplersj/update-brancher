@@ -11,14 +11,8 @@
     "precommit": "lint-staged"
   },
   "lint-staged": {
-    "*.js": [
-      "eslint --fix",
-      "git add"
-    ],
-    "*.json": [
-      "prettier --parser json --write",
-      "git add"
-    ]
+    "*.js": ["eslint --fix", "git add"],
+    "*.json": ["prettier --parser json --write", "git add"]
   },
   "devDependencies": {
     "eslint": "^4.3.0",
@@ -27,5 +21,9 @@
     "husky": "^0.14.3",
     "lint-staged": "^4.0.2",
     "prettier": "^1.5.3"
+  },
+  "dependencies": {
+    "chalk": "^2.0.1",
+    "pify": "^3.0.0"
   }
 }
