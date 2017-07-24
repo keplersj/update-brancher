@@ -6,88 +6,86 @@ const Listr = require("listr");
 const dependencyTask = dependency => ({
   title: `\`${dependency}\``,
   task: () =>
-    new Listr(
-      [
-        {
-          title: "Checking Git Status",
-          task: () =>
-            execa
-              .stdout("git", ["status", "--porcelain"])
-              .then(result => {
-                if (result !== "") {
-                  throw new Error(
-                    "Unclean working tree. Commit or stash changes first."
-                  );
-                }
-              })
-              .catch(err => {
-                throw err;
-              })
-        },
-        {
-          title: "Checking Out `master` Branch",
-          task: () => execa.stdout("git", ["checkout", "master"])
-        },
-        {
-          title: `Checking Out \`update-brancher/update_${dependency}\` Branch`,
-          task: () =>
-            execa
-              .stdout("git", [
-                "checkout",
-                "-b",
-                `update-brancher/update_${dependency}`
-              ])
-              .catch(err => {
-                throw err;
-              })
-        },
-        {
-          title: "Updating Package Using `yarn`",
-          task: (ctx, task) =>
-            execa.stdout("yarn", ["upgrade", dependency]).catch(() => {
-              ctx.yarn = false;
+    new Listr([
+      {
+        title: "Checking Git Status",
+        task: () =>
+          execa
+            .stdout("git", ["status", "--porcelain"])
+            .then(result => {
+              if (result !== "") {
+                throw new Error(
+                  "Unclean working tree. Commit or stash changes first."
+                );
+              }
+            })
+            .catch(err => {
+              throw err;
+            })
+      },
+      {
+        title: "Checking Out `master` Branch",
+        task: () => execa.stdout("git", ["checkout", "master"])
+      },
+      {
+        title: `Checking Out \`update-brancher/update_${dependency}\` Branch`,
+        task: () =>
+          execa
+            .stdout("git", [
+              "checkout",
+              "-b",
+              `update-brancher/update_${dependency}`
+            ])
+            .catch(err => {
+              throw err;
+            })
+      },
+      {
+        title: "Updating Package Using `yarn`",
+        task: (ctx, task) =>
+          execa.stdout("yarn", ["upgrade", dependency]).catch(() => {
+            ctx.yarn = false;
 
-              task.skip(
-                "Yarn not available, install it via `npm install -g yarn`"
-              );
-            })
-        },
-        {
-          title: "Updating Package Using `npm`",
-          enabled: ctx => ctx.yarn === false,
-          task: () =>
-            execa.stdout("npm", ["update", dependency]).catch(err => {
+            task.skip(
+              "Yarn not available, install it via `npm install -g yarn`"
+            );
+          })
+      },
+      {
+        title: "Updating Package Using `npm`",
+        enabled: ctx => ctx.yarn === false,
+        task: () =>
+          execa.stdout("npm", ["update", dependency]).catch(err => {
+            execa.stdout("git", ["reset", "--hard", "master"]);
+            execa.stdout("git", ["checkout", "master"]);
+            throw new Error(`Unable to Upgrade Dependency \`${dependency}\``);
+          })
+      },
+      {
+        title: "Staging Changed Files",
+        task: () =>
+          execa.stdout("git", ["add", "-A"]).catch(err => {
+            execa.stdout("git", ["reset", "--hard", "master"]);
+            execa.stdout("git", ["checkout", "master"]);
+            throw new Error(`Unable to Upgrade Dependency \`${dependency}\``);
+          })
+      },
+      {
+        title: "Committing Changed Files",
+        task: () =>
+          execa
+            .stdout("git", ["commit", "-m", `"Update ${dependency}"`])
+            .catch(err => {
               execa.stdout("git", ["reset", "--hard", "master"]);
               execa.stdout("git", ["checkout", "master"]);
-              throw new Error(`Unable to Upgrade Dependency \`${dependency}\``);
+              throw err;
             })
-        },
-        {
-          title: "Staging Changed Files",
-          task: () =>
-            execa.stdout("git", ["add", "-A"]).catch(err => {
-              execa.stdout("git", ["reset", "--hard", "master"]);
-              execa.stdout("git", ["checkout", "master"]);
-              throw new Error(`Unable to Upgrade Dependency \`${dependency}\``);
-            })
-        },
-        {
-          title: "Committing Changed Files",
-          task: () =>
-            execa
-              .stdout("git", ["commit", "-m", `"Update ${dependency}"`])
-              .catch(err => {
-                execa.stdout("git", ["reset", "--hard", "master"]);
-                throw err;
-              })
-        },
-        {
-          title: "Checking Out `master` Branch",
-          task: () => execa.stdout("git", ["checkout", "master"])
-        }
-      ],
-      { exitOnError: false }
-    )
+      },
+      {
+        title: "Checking Out `master` Branch",
+        task: () => execa.stdout("git", ["checkout", "master"])
+      }
+    ])
 });
 
 function runUpdate() {
